@@ -25,12 +25,7 @@ import {
 import RenJS from "@renproject/ren";
 import { Terra } from "@renproject/chains";
 import { Bitcoin } from "@renproject/chains-bitcoin";
-import {
-  Ethereum,
-  EthereumBaseChain,
-  EthProvider,
-  EvmNetworkConfig,
-} from "@renproject/chains-ethereum";
+import { Ethereum } from "@renproject/chains-ethereum";
 import { Chain, RenNetwork } from "@renproject/utils";
 import Identicon from "react-identicons";
 import { FaEthereum, FaBitcoin } from "react-icons/fa";
@@ -52,55 +47,6 @@ enum COIN {
   LUNA = "LUNA",
 }
 
-interface EVMConstructor<EVM> {
-  configMap: {
-    [network in RenNetwork]?: EvmNetworkConfig;
-  };
-
-  new (renNetwork: RenNetwork, web3Provider: EthProvider): EVM;
-}
-
-export interface ChainInstance {
-  chain: Chain;
-  connectionRequired?: boolean;
-  accounts?: string[];
-}
-
-export const getEVMChain = <EVM extends EthereumBaseChain>(
-  ChainClass: EVMConstructor<EVM>,
-  network: RenNetwork
-): ChainInstance & {
-  chain: EVM;
-} => {
-  const config = ChainClass.configMap[network];
-  if (!config) {
-    throw new Error(`No configuration for ${ChainClass.name} on ${network}.`);
-  }
-
-  let rpcUrl = config.network.rpcUrls[0];
-  if (process.env.REACT_APP_INFURA_KEY) {
-    for (const url of config.network.rpcUrls) {
-      if (url.match(/^https:\/\/.*\$\{INFURA_API_KEY\}/)) {
-        rpcUrl = url.replace(
-          /\$\{INFURA_API_KEY\}/,
-          process.env.REACT_APP_INFURA_KEY
-        );
-        break;
-      }
-    }
-  }
-
-  const provider = new providers.JsonRpcProvider(rpcUrl);
-
-  return {
-    chain: new ChainClass(network, {
-      provider,
-    }),
-    connectionRequired: true,
-    accounts: [],
-  };
-};
-
 const contractAddress = "0x2A66347B4E85e8aCD4144AB495d48f4E7DCE724E";
 let web3Provider;
 if (typeof window !== "undefined") {
@@ -108,10 +54,13 @@ if (typeof window !== "undefined") {
 }
 const web3 = new Web3(web3Provider || "http://127.0.0.1:8545");
 const contract = new web3.eth.Contract((FLIP_JSON as any).abi, contractAddress);
+contract.once('Deposit', (error, event) => {
+  console.log(event);
+})
 const network = RenNetwork.Testnet;
-const bitcoin = new Bitcoin(network);
-const ethereum = getEVMChain(Ethereum, network);
-const renJS = new RenJS(network).withChains(bitcoin, ethereum.chain);
+const bitcoin = new Bitcoin({ network });
+const ethereum = new Ethereum({ network, provider: new providers.JsonRpcProvider(Ethereum.configMap[network].network.rpcUrls[0]) });
+const renJS = new RenJS(network).withChains(bitcoin, ethereum);
 
 const Home: NextPage = () => {
   const modalStyle = {
@@ -220,14 +169,13 @@ const Home: NextPage = () => {
     if (symbol === COIN.ETH) {
       return false;
     }
-    console.log(bitcoin);
     const gateway = await renJS.gateway({
       asset: symbol,
       from:
         symbol === COIN.BTC
-          ? (bitcoin as Bitcoin).GatewayAddress()
+          ? bitcoin.GatewayAddress()
           : new Terra({ network }),
-      to: ethereum.chain.Contract({
+      to: ethereum.Contract({
         to: contractAddress,
         method: symbol === COIN.BTC ? "depositBTC" : "depositLUNA",
         withRenParams: true,
@@ -241,7 +189,53 @@ const Home: NextPage = () => {
       }),
     });
     console.log(gateway);
-    // setGatewayAddress(gateway.gatewayAddress);
+    if (gateway.gatewayAddress) {
+      setGatewayAddress(gateway.gatewayAddress);
+    }
+
+    console.log("gateway fee: ", gateway.fees);
+    await gateway.inSetup.approval.submit({
+      txConfig: {
+        gasLimit: 1000000,
+      },
+    });
+    await gateway.inSetup.approval.wait();
+    await gateway.in.submit().on("progress", console.log);
+    await gateway.in.wait(1);
+
+    gateway.on("transaction", (tx) => {
+      (async () => {
+        // GatewayTransaction parameters are serializable. To re-create
+        // the transaction, call `renJS.gatewayTransaction`.
+        console.log(tx);
+
+        // Wait for remaining confirmations for input transaction.
+        await tx.in.wait();
+
+        // RenVM transaction also follows the submit/wait pattern.
+        await tx.renVM.submit().on("progress", console.log);
+        await tx.renVM.wait();
+
+        // `submit` accepts a `txConfig` parameter for overriding
+        // transaction config.
+        await tx.out.submit({
+          txConfig: {
+            gasLimit: 1000000,
+          },
+        });
+        await tx.out.wait();
+
+        // All transactions return a `ChainTransaction` object in the
+        // progress field, with a `txid` field (base64) and a
+        // `txidFormatted` field (chain-dependent).
+        const outTx = tx.out.progress.transaction;
+        console.log("Done:", outTx.txidFormatted);
+
+        // All chain classes expose a common set of helper functions (see
+        // `Chain` class.)
+        console.log(tx.toChain.transactionExplorerLink(outTx));
+      })().catch(console.error);
+    });
     // mint.on("deposit", async (deposit) => {
     //   const hash = deposit.txHash();
     //   console.log(hash);
