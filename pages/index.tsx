@@ -2,7 +2,7 @@ import type { NextPage } from "next";
 import { useEffect, useState } from "react";
 import styles from "../styles/Home.module.css";
 import Web3 from "web3";
-import { providers } from "ethers";
+import { ethers, providers } from "ethers";
 import {
   Container,
   Box,
@@ -27,6 +27,7 @@ import { Terra } from "@renproject/chains";
 import { Bitcoin } from "@renproject/chains-bitcoin";
 import { Ethereum } from "@renproject/chains-ethereum";
 import { Chain, RenNetwork } from "@renproject/utils";
+import detectEthereumProvider from "@metamask/detect-provider";
 import Identicon from "react-identicons";
 import { FaEthereum, FaBitcoin } from "react-icons/fa";
 import FLIP_JSON from "./Flip.json";
@@ -48,18 +49,16 @@ enum COIN {
 }
 
 const contractAddress = "0x2A66347B4E85e8aCD4144AB495d48f4E7DCE724E";
-let web3Provider;
-if (typeof window !== "undefined") {
-  web3Provider = (window as any).ethereum;
-}
-const web3 = new Web3(web3Provider || "http://127.0.0.1:8545");
-const contract = new web3.eth.Contract((FLIP_JSON as any).abi, contractAddress);
-contract.once('Deposit', (error, event) => {
-  console.log(event);
-})
 const network = RenNetwork.Testnet;
 const bitcoin = new Bitcoin({ network });
-const ethereum = new Ethereum({ network, provider: new providers.JsonRpcProvider(Ethereum.configMap[network].network.rpcUrls[0]) });
+const ethereum = new Ethereum({
+  network,
+  provider: new providers.JsonRpcProvider(
+    Ethereum.configMap[network].network.rpcUrls[0]
+  ),
+});
+// const provider: any = await detectEthereumProvider();
+
 const renJS = new RenJS(network).withChains(bitcoin, ethereum);
 
 const Home: NextPage = () => {
@@ -75,6 +74,8 @@ const Home: NextPage = () => {
     p: 4,
   };
 
+  let [web3, setWeb3] = useState<any>();
+  let [contract, setContract] = useState<any>();
   let [address, setAddress] = useState("");
   let [recipientAddress, setRecipientAddress] = useState("");
   let [gatewayAddress, setGatewayAddress] = useState("");
@@ -97,6 +98,22 @@ const Home: NextPage = () => {
   let [selectedCoin, setSelectedCoin] = useState(COIN.ETH);
 
   useEffect(() => {
+    ethereum.withSigner(
+      new ethers.providers.Web3Provider(
+        (window as any).ethereum,
+        "any"
+      ).getSigner()
+    );
+    let web3 = new Web3((window as any).ethereum || "http://127.0.0.1:8545");
+    setWeb3(web3);
+    const contract = new web3.eth.Contract(
+      (FLIP_JSON as any).abi,
+      contractAddress
+    );
+    setContract(contract);
+    contract.once("Deposit", (error, event) => {
+      console.log(event);
+    });
     getAddress();
     getContractBalance();
     getGames();
@@ -107,29 +124,33 @@ const Home: NextPage = () => {
   }, [address]);
 
   const getAddress = () => {
-    web3.eth.getAccounts().then((accounts) => {
-      setAddress(accounts[0]);
-    });
+    if (web3) {
+      web3.eth.getAccounts().then((accounts: any) => {
+        setAddress(accounts[0]);
+      });
+    }
   };
 
   const getContractBalance = () => {
-    web3.eth.getBalance(contractAddress).then((balance) => {
-      setContractBalance((prevState) => ({
-        ...prevState,
-        ETH: Number(web3.utils.fromWei(balance, "ether")),
-      }));
-    });
-    contract.methods
-      .getTotalBalance()
-      .call()
-      .then((balance: Balance) => {
-        console.log("Contract Balance: ", balance);
+    if (web3 && contract) {
+      web3.eth.getBalance(contractAddress).then((balance: any) => {
         setContractBalance((prevState) => ({
           ...prevState,
-          BTC: balance.btc,
-          LUNA: balance.luna,
+          ETH: Number(web3.utils.fromWei(balance, "ether")),
         }));
       });
+      contract.methods
+        .getTotalBalance()
+        .call()
+        .then((balance: Balance) => {
+          console.log("Contract Balance: ", balance);
+          setContractBalance((prevState) => ({
+            ...prevState,
+            BTC: balance.btc,
+            LUNA: balance.luna,
+          }));
+        });
+    }
   };
 
   const getUserBalance = () => {
@@ -156,13 +177,15 @@ const Home: NextPage = () => {
   };
 
   const getGames = () => {
-    contract.methods
-      .getGames()
-      .call()
-      .then((games: Game[]) => {
-        console.log("Games: ", games);
-        setGames(games);
-      });
+    if (contract) {
+      contract.methods
+        .getGames()
+        .call()
+        .then((games: Game[]) => {
+          console.log("Games: ", games);
+          setGames(games);
+        });
+    }
   };
 
   const deposit = async (symbol: COIN) => {
@@ -172,9 +195,7 @@ const Home: NextPage = () => {
     const gateway = await renJS.gateway({
       asset: symbol,
       from:
-        symbol === COIN.BTC
-          ? bitcoin.GatewayAddress()
-          : new Terra({ network }),
+        symbol === COIN.BTC ? bitcoin.GatewayAddress() : new Terra({ network }),
       to: ethereum.Contract({
         to: contractAddress,
         method: symbol === COIN.BTC ? "depositBTC" : "depositLUNA",
@@ -194,14 +215,14 @@ const Home: NextPage = () => {
     }
 
     console.log("gateway fee: ", gateway.fees);
-    await gateway.inSetup.approval.submit({
-      txConfig: {
-        gasLimit: 1000000,
-      },
-    });
-    await gateway.inSetup.approval.wait();
-    await gateway.in.submit().on("progress", console.log);
-    await gateway.in.wait(1);
+    // await gateway.inSetup.approval.submit({
+    //   txConfig: {
+    //     gasLimit: 1000000,
+    //   },
+    // });
+    // await gateway.inSetup.approval.wait();
+    // await gateway.in.submit().on("progress", console.log);
+    // await gateway.in.wait(1);
 
     gateway.on("transaction", (tx) => {
       (async () => {
