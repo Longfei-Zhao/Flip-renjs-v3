@@ -27,7 +27,6 @@ import { Terra } from "@renproject/chains";
 import { Bitcoin } from "@renproject/chains-bitcoin";
 import { Ethereum } from "@renproject/chains-ethereum";
 import { Chain, RenNetwork } from "@renproject/utils";
-import detectEthereumProvider from "@metamask/detect-provider";
 import Identicon from "react-identicons";
 import { FaEthereum, FaBitcoin } from "react-icons/fa";
 import FLIP_JSON from "./Flip.json";
@@ -48,13 +47,13 @@ enum COIN {
   LUNA = "LUNA",
 }
 
-const contractAddress = "0x2A66347B4E85e8aCD4144AB495d48f4E7DCE724E";
+const contractAddress = "0x3Ab5c552935e5CE3c7819c309107a15e7946f512";
 const network = RenNetwork.Testnet;
 const bitcoin = new Bitcoin({ network });
 const ethereum = new Ethereum({
   network,
   provider: new providers.JsonRpcProvider(
-    Ethereum.configMap[network].network.rpcUrls[0]
+    (Ethereum.configMap[network] as any).network.rpcUrls[0]
   ),
 });
 // const provider: any = await detectEthereumProvider();
@@ -114,10 +113,13 @@ const Home: NextPage = () => {
     contract.once("Deposit", (error, event) => {
       console.log(event);
     });
+  }, []);
+
+  useEffect(() => {
     getAddress();
     getContractBalance();
     getGames();
-  }, []);
+  }, [web3, contract])
 
   useEffect(() => {
     getUserBalance();
@@ -155,7 +157,7 @@ const Home: NextPage = () => {
 
   const getUserBalance = () => {
     if (address) {
-      web3.eth.getBalance(address).then((balance) => {
+      web3.eth.getBalance(address).then((balance: Balance) => {
         console.log("User Balance(ETH): ", balance);
         setUserBalance((prevState) => ({
           ...prevState,
@@ -163,7 +165,7 @@ const Home: NextPage = () => {
         }));
       });
       contract.methods
-        .getBalance()
+        .getBalance(address)
         .call()
         .then((balance: Balance) => {
           console.log("User Balance: ", balance);
@@ -202,9 +204,9 @@ const Home: NextPage = () => {
         withRenParams: true,
         params: [
           {
-            name: "_msg",
-            type: "bytes",
-            value: Buffer.from(`Depositing ${amount} BTC`),
+            name: "_address",
+            type: "address",
+            value: address,
           },
         ],
       }),
@@ -257,42 +259,9 @@ const Home: NextPage = () => {
         console.log(tx.toChain.transactionExplorerLink(outTx));
       })().catch(console.error);
     });
-    // mint.on("deposit", async (deposit) => {
-    //   const hash = deposit.txHash();
-    //   console.log(hash);
-    //   const depositLog = (msg) =>
-    //     console.log(
-    //       `BTC deposit: ${Bitcoin.utils.transactionExplorerLink(
-    //         deposit.depositDetails.transaction,
-    //         "testnet"
-    //       )}\n
-    //         RenVM Hash: ${hash}\n
-    //         Status: ${deposit.status}\n
-    //         ${msg}`
-    //     );
-
-    //   await deposit
-    //     .confirmed()
-    //     .on("target", (target) => depositLog(`0/${target} confirmations`))
-    //     .on("confirmation", (confs, target) =>
-    //       depositLog(`${confs}/${target} confirmations`)
-    //     );
-
-    //   await deposit
-    //     .signed()
-    //     // Print RenVM status - "pending", "confirming" or "done".
-    //     .on("status", (status) => depositLog(`Status: ${status}`));
-
-    //   await deposit
-    //     .mint()
-    //     // Print Ethereum transaction hash.
-    //     .on("transactionHash", (txHash) => depositLog(`Mint tx: ${txHash}`));
-
-    //   console.log(`Deposited ${amount} BTC.`);
-    // });
   };
 
-  const withdraw = async (symbol: COIN, recipientAddress, amount) => {
+  const withdraw = async (symbol: COIN, recipientAddress: string, amount) => {
     const burnAndRelease = await renJS.burnAndRelease({
       // Send BTC from Ethereum back to the Bitcoin blockchain.
       asset: symbol,
@@ -354,12 +323,22 @@ const Home: NextPage = () => {
   };
 
   const openGame = async (symbol: COIN, amount: string) => {
-    contract.methods
-      .openGame(symbol, web3.utils.toWei(amount, "ether"))
-      .send({ from: address, value: web3.utils.toWei(amount, "ether") })
-      .then(() => {
-        update();
-      });
+    if (symbol === COIN.ETH) {
+      contract.methods
+        .openGame(symbol, web3.utils.toWei(amount, "ether"))
+        .send({ from: address, value: web3.utils.toWei(amount, "ether") })
+        .then(() => {
+          update();
+        });
+    }
+    if (symbol === COIN.BTC) {
+      contract.methods
+        .openGame(symbol, web3.eth.abi.encodeParameter('uint256', amount))
+        .send({ from: address })
+        .then(() => {
+          update();
+        });
+    }
 
     setCreateGameModalIsOpened(false);
   };
@@ -421,24 +400,37 @@ const Home: NextPage = () => {
       <Container maxWidth="xl">
         <Stack
           direction={{ xs: "column", sm: "row" }}
-          alignItems="center"
+          alignItems="start"
           divider={<Divider orientation="vertical" flexItem />}
           spacing={5}
           mt={3}
         >
-          <Typography variant="h1">COIN FLIP</Typography>
+          <Typography variant="h2">COIN FLIP</Typography>
           <Stack>
-            <Typography variant="h6">Contract Balance</Typography>
-            <Typography variant="h4" sx={{ color: "#009688" }}>
-              <FaEthereum />
-              {Number(contractBalance.ETH).toFixed(2)}
-              <FaBitcoin />
-              {contractBalance.BTC} /{Number(contractBalance.LUNA)} LUNA
-            </Typography>
+            <Typography variant="h5">Contract Balance</Typography>
+            <Stack sx={{ mt: 2 }}>
+              <Stack direction="row" alignItems="center" spacing={1}>
+                <Typography variant="h4" sx={{ color: "#009688" }}>
+                  <FaEthereum />
+                </Typography>
+                <Typography variant="h4" sx={{ color: "#009688" }}>
+                  {contractBalance.ETH}
+                </Typography>
+              </Stack>
+              <Stack direction="row" alignItems="center" spacing={1}>
+                <Typography variant="h4" sx={{ color: "#009688" }}>
+                  <FaBitcoin />
+                </Typography>
+                <Typography variant="h4" sx={{ color: "#009688" }}>
+                  {contractBalance.BTC / (10 ** 8)}
+                </Typography>
+              </Stack>
+            </Stack>
+            {/* {Number(contractBalance.LUNA)} LUNA */}
           </Stack>
           <Stack>
             <Typography variant="h6">Opened Games</Typography>
-            <Typography variant="h3" sx={{ color: "#009688" }}>
+            <Typography variant="h4" sx={{ color: "#009688", mt: 2 }}>
               {games.length}
             </Typography>
           </Stack>
@@ -461,13 +453,24 @@ const Home: NextPage = () => {
             >
               <Identicon string={address} size={50} />
             </Avatar>
-            <Typography variant="h4">
-              <FaEthereum />
-              {Number(userbalance.ETH).toFixed(4)} /
-              <FaBitcoin />
-              {Number(userbalance.BTC).toFixed(4)} /
-              {Number(userbalance.LUNA).toFixed(4)} <sup>LUNA</sup>
-            </Typography>
+            <Stack>
+              <Stack direction="row" alignItems="center" spacing={1}>
+                <Typography variant="h4">
+                  <FaEthereum />
+                </Typography>
+                <Typography variant="h4">
+                  {userbalance.ETH}
+                </Typography>
+              </Stack>
+              <Stack direction="row" alignItems="center" spacing={1}>
+                <Typography variant="h4">
+                  <FaBitcoin />
+                </Typography>
+                <Typography variant="h4">
+                  {userbalance.BTC / (10 ** 8)}
+                </Typography>
+              </Stack>
+            </Stack>
           </Stack>
         </Paper>
         <Stack direction="row" spacing={2} mt={3}>
@@ -661,14 +664,15 @@ const Home: NextPage = () => {
                     </Avatar>
                     <Typography variant="body2">
                       {game.initiator !== address
-                        ? game.initiator
+                        ? game.initiator.replace(game.initiator.substring(5, 38), "...")
                         : "Created By You"}
                     </Typography>
                   </Stack>
                   <Typography variant="h4" sx={{ textAlign: "center", mt: 5 }}>
-                    {Number(
+                    {game.symbol === COIN.ETH && Number(
                       web3.utils.fromWei(game.amount.toString(), "ether")
-                    ).toFixed(6)}
+                    )}
+                    {game.symbol === COIN.BTC && Number(game.amount) / (10 ** 8)}
                     {game.symbol}
                   </Typography>
                 </CardContent>
