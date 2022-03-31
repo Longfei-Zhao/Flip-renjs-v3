@@ -47,7 +47,7 @@ enum COIN {
   LUNA = "LUNA",
 }
 
-const contractAddress = "0x3Ab5c552935e5CE3c7819c309107a15e7946f512";
+const contractAddress = "0xD05fc5bBBd3Dd3981cC3798FEda389acF993d632";
 const network = RenNetwork.Testnet;
 const bitcoin = new Bitcoin({ network });
 const ethereum = new Ethereum({
@@ -119,7 +119,7 @@ const Home: NextPage = () => {
     getAddress();
     getContractBalance();
     getGames();
-  }, [web3, contract])
+  }, [web3, contract]);
 
   useEffect(() => {
     getUserBalance();
@@ -261,24 +261,28 @@ const Home: NextPage = () => {
     });
   };
 
-  const withdraw = async (symbol: COIN, recipientAddress: string, amount) => {
-    const burnAndRelease = await renJS.burnAndRelease({
-      // Send BTC from Ethereum back to the Bitcoin blockchain.
+  const withdraw = async (
+    symbol: COIN,
+    recipientAddress: string,
+    amount: string
+  ) => {
+    console.log("1");
+    const gateway = await renJS.gateway({
       asset: symbol,
-      to:
-        symbol === COIN.BTC
-          ? Bitcoin().Address(recipientAddress)
-          : Terra().Address(recipientAddress),
-      from: Ethereum(web3.currentProvider).Contract((recipientAddress) => ({
-        sendTo: contractAddress,
-
-        contractFn: "withdraw",
-
-        contractParams: [
+      from: ethereum.Contract({
+        to: contractAddress,
+        method: "withdraw",
+        withRenParams: true,
+        params: [
           {
             type: "string",
             name: "_symbol",
             value: symbol,
+          },
+          {
+            name: "_address",
+            type: "address", 
+            value: address,
           },
           {
             type: "bytes",
@@ -288,38 +292,101 @@ const Home: NextPage = () => {
           {
             type: "uint256",
             name: "_amount",
-            value:
-              symbol === COIN.BTC
-                ? RenJS.utils.toSmallestUnit(amount, 8)
-                : RenJS.utils.toSmallestUnit(amount, 8),
+            value: symbol === web3.eth.abi.encodeParameter("uint256", amount),
           },
         ],
-      })),
+      }),
+      to: bitcoin.Address(recipientAddress),
     });
-    let confirmations = 0;
-    await burnAndRelease
-      .burn()
-      // Ethereum transaction confirmations.
-      .on("confirmation", (confs) => {
-        confirmations = confs;
-      })
-      // Print Ethereum transaction hash.
-      .on("transactionHash", (txHash) =>
-        console.log(`Ethereum transaction: ${String(txHash)}\nSubmitting...`)
-      );
+    console.log(gateway);
+    gateway.on("transaction", (tx) => {
+      (async () => {
+        // GatewayTransaction parameters are serializable. To re-create
+        // the transaction, call `renJS.gatewayTransaction`.
+        console.log(tx);
 
-    await burnAndRelease
-      .release()
-      // Print RenVM status - "pending", "confirming" or "done".
-      .on("status", (status) =>
-        status === "confirming"
-          ? console.log(`${status} (${confirmations}/15)`)
-          : console.log(status)
-      )
-      // Print RenVM transaction hash
-      .on("txHash", (hash) => console.log(`RenVM hash: ${hash}`));
+        // Wait for remaining confirmations for input transaction.
+        await tx.in.wait();
 
-    console.log(`Withdrew ${amount} BTC to ${recipientAddress}.`);
+        // RenVM transaction also follows the submit/wait pattern.
+        await tx.renVM.submit().on("progress", console.log);
+        await tx.renVM.wait();
+
+        // `submit` accepts a `txConfig` parameter for overriding
+        // transaction config.
+        await tx.out.submit({
+          txConfig: {
+            gasLimit: 1000000,
+          },
+        });
+        await tx.out.wait();
+
+        // All transactions return a `ChainTransaction` object in the
+        // progress field, with a `txid` field (base64) and a
+        // `txidFormatted` field (chain-dependent).
+        const outTx = tx.out.progress.transaction;
+        console.log("Done:", outTx.txidFormatted);
+
+        // All chain classes expose a common set of helper functions (see
+        // `Chain` class.)
+        console.log(tx.toChain.transactionExplorerLink(outTx));
+      })().catch(console.error);
+    });
+    // const burnAndRelease = await renJS.burnAndRelease({
+    //   // Send BTC from Ethereum back to the Bitcoin blockchain.
+    //   asset: symbol,
+    //   to:
+    //     symbol === COIN.BTC
+    //       ? Bitcoin().Address(recipientAddress)
+    //       : Terra().Address(recipientAddress),
+    //   from: Ethereum(web3.currentProvider).Contract((recipientAddress) => ({
+    //     sendTo: contractAddress,
+
+    //     contractFn: "withdraw",
+
+    //     contractParams: [
+    //       {
+    //         type: "string",
+    //         name: "_symbol",
+    //         value: symbol,
+    //       },
+    //       {
+    //         type: "bytes",
+    //         name: "_to",
+    //         value: recipientAddress,
+    //       },
+    //       {
+    //         type: "uint256",
+    //         name: "_amount",
+    //         value: web3.eth.abi.encodeParameter("uint256", amount),
+    //       },
+    //     ],
+    //   })),
+    // });
+    // let confirmations = 0;
+    // await burnAndRelease
+    //   .burn()
+    //   // Ethereum transaction confirmations.
+    //   .on("confirmation", (confs) => {
+    //     confirmations = confs;
+    //   })
+    //   // Print Ethereum transaction hash.
+    //   .on("transactionHash", (txHash) =>
+    //     console.log(`Ethereum transaction: ${String(txHash)}\nSubmitting...`)
+    //   );
+
+    // await burnAndRelease
+    //   .release()
+    //   // Print RenVM status - "pending", "confirming" or "done".
+    //   .on("status", (status) =>
+    //     status === "confirming"
+    //       ? console.log(`${status} (${confirmations}/15)`)
+    //       : console.log(status)
+    //   )
+    //   // Print RenVM transaction hash
+    //   .on("txHash", (hash) => console.log(`RenVM hash: ${hash}`));
+
+    // console.log(`Withdrew ${amount} BTC to ${recipientAddress}.`);
   };
 
   const openGame = async (symbol: COIN, amount: string) => {
@@ -333,7 +400,7 @@ const Home: NextPage = () => {
     }
     if (symbol === COIN.BTC) {
       contract.methods
-        .openGame(symbol, web3.eth.abi.encodeParameter('uint256', amount))
+        .openGame(symbol, web3.eth.abi.encodeParameter("uint256", amount))
         .send({ from: address })
         .then(() => {
           update();
@@ -422,7 +489,7 @@ const Home: NextPage = () => {
                   <FaBitcoin />
                 </Typography>
                 <Typography variant="h4" sx={{ color: "#009688" }}>
-                  {contractBalance.BTC / (10 ** 8)}
+                  {contractBalance.BTC / 10 ** 8}
                 </Typography>
               </Stack>
             </Stack>
@@ -458,16 +525,14 @@ const Home: NextPage = () => {
                 <Typography variant="h4">
                   <FaEthereum />
                 </Typography>
-                <Typography variant="h4">
-                  {userbalance.ETH}
-                </Typography>
+                <Typography variant="h4">{userbalance.ETH}</Typography>
               </Stack>
               <Stack direction="row" alignItems="center" spacing={1}>
                 <Typography variant="h4">
                   <FaBitcoin />
                 </Typography>
                 <Typography variant="h4">
-                  {userbalance.BTC / (10 ** 8)}
+                  {userbalance.BTC / 10 ** 8}
                 </Typography>
               </Stack>
             </Stack>
@@ -664,15 +729,19 @@ const Home: NextPage = () => {
                     </Avatar>
                     <Typography variant="body2">
                       {game.initiator !== address
-                        ? game.initiator.replace(game.initiator.substring(5, 38), "...")
+                        ? game.initiator.replace(
+                            game.initiator.substring(5, 38),
+                            "..."
+                          )
                         : "Created By You"}
                     </Typography>
                   </Stack>
                   <Typography variant="h4" sx={{ textAlign: "center", mt: 5 }}>
-                    {game.symbol === COIN.ETH && Number(
-                      web3.utils.fromWei(game.amount.toString(), "ether")
-                    )}
-                    {game.symbol === COIN.BTC && Number(game.amount) / (10 ** 8)}
+                    {game.symbol === COIN.ETH &&
+                      Number(
+                        web3.utils.fromWei(game.amount.toString(), "ether")
+                      )}
+                    {game.symbol === COIN.BTC && Number(game.amount) / 10 ** 8}
                     {game.symbol}
                   </Typography>
                 </CardContent>
