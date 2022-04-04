@@ -47,7 +47,7 @@ enum COIN {
   LUNA = "LUNA",
 }
 
-const contractAddress = "0xD05fc5bBBd3Dd3981cC3798FEda389acF993d632";
+const contractAddress = "0x698D11acAbB319e9FC9b1c9fA0768cED2B08d998";
 const network = RenNetwork.Testnet;
 const bitcoin = new Bitcoin({ network });
 const ethereum = new Ethereum({
@@ -119,6 +119,15 @@ const Home: NextPage = () => {
     getAddress();
     getContractBalance();
     getGames();
+    if (web3 && contract) {
+      contract.methods
+        .getBtcBalance()
+        .call()
+        .then((balance: Balance) => {
+          console.log("Contract BTC Balance: ", balance);
+        });
+    }
+
   }, [web3, contract]);
 
   useEffect(() => {
@@ -241,11 +250,11 @@ const Home: NextPage = () => {
 
         // `submit` accepts a `txConfig` parameter for overriding
         // transaction config.
-        await tx.out.submit({
-          txConfig: {
-            gasLimit: 1000000,
-          },
-        });
+        if (tx.out.submit) {
+          await tx.out.submit({
+            txConfig: {},
+          });
+        }
         await tx.out.wait();
 
         // All transactions return a `ChainTransaction` object in the
@@ -266,13 +275,13 @@ const Home: NextPage = () => {
     recipientAddress: string,
     amount: string
   ) => {
-    console.log("1");
+    const _amount = web3.eth.abi.encodeParameter("uint256", amount);
     const gateway = await renJS.gateway({
       asset: symbol,
       from: ethereum.Contract({
         to: contractAddress,
         method: "withdraw",
-        withRenParams: true,
+        withRenParams: false,
         params: [
           {
             type: "string",
@@ -281,112 +290,49 @@ const Home: NextPage = () => {
           },
           {
             name: "_address",
-            type: "address", 
+            type: "address",
             value: address,
           },
           {
             type: "bytes",
             name: "_to",
-            value: recipientAddress,
+            value: Buffer.from(recipientAddress),
           },
           {
             type: "uint256",
             name: "_amount",
-            value: symbol === web3.eth.abi.encodeParameter("uint256", amount),
+            value: _amount,
           },
         ],
       }),
       to: bitcoin.Address(recipientAddress),
     });
     console.log(gateway);
+
+    await gateway.in.submit({
+      txConfig: {
+        gasLimit: 1000000,
+      },
+    });
+    await gateway.in.wait(1);
+
     gateway.on("transaction", (tx) => {
       (async () => {
-        // GatewayTransaction parameters are serializable. To re-create
-        // the transaction, call `renJS.gatewayTransaction`.
         console.log(tx);
-
-        // Wait for remaining confirmations for input transaction.
         await tx.in.wait();
-
-        // RenVM transaction also follows the submit/wait pattern.
         await tx.renVM.submit().on("progress", console.log);
         await tx.renVM.wait();
-
-        // `submit` accepts a `txConfig` parameter for overriding
-        // transaction config.
-        await tx.out.submit({
-          txConfig: {
-            gasLimit: 1000000,
-          },
-        });
+        if (tx.out.submit) {
+          await tx.out.submit({
+            txConfig: {},
+          });
+        }
         await tx.out.wait();
-
-        // All transactions return a `ChainTransaction` object in the
-        // progress field, with a `txid` field (base64) and a
-        // `txidFormatted` field (chain-dependent).
         const outTx = tx.out.progress.transaction;
         console.log("Done:", outTx.txidFormatted);
-
-        // All chain classes expose a common set of helper functions (see
-        // `Chain` class.)
         console.log(tx.toChain.transactionExplorerLink(outTx));
       })().catch(console.error);
     });
-    // const burnAndRelease = await renJS.burnAndRelease({
-    //   // Send BTC from Ethereum back to the Bitcoin blockchain.
-    //   asset: symbol,
-    //   to:
-    //     symbol === COIN.BTC
-    //       ? Bitcoin().Address(recipientAddress)
-    //       : Terra().Address(recipientAddress),
-    //   from: Ethereum(web3.currentProvider).Contract((recipientAddress) => ({
-    //     sendTo: contractAddress,
-
-    //     contractFn: "withdraw",
-
-    //     contractParams: [
-    //       {
-    //         type: "string",
-    //         name: "_symbol",
-    //         value: symbol,
-    //       },
-    //       {
-    //         type: "bytes",
-    //         name: "_to",
-    //         value: recipientAddress,
-    //       },
-    //       {
-    //         type: "uint256",
-    //         name: "_amount",
-    //         value: web3.eth.abi.encodeParameter("uint256", amount),
-    //       },
-    //     ],
-    //   })),
-    // });
-    // let confirmations = 0;
-    // await burnAndRelease
-    //   .burn()
-    //   // Ethereum transaction confirmations.
-    //   .on("confirmation", (confs) => {
-    //     confirmations = confs;
-    //   })
-    //   // Print Ethereum transaction hash.
-    //   .on("transactionHash", (txHash) =>
-    //     console.log(`Ethereum transaction: ${String(txHash)}\nSubmitting...`)
-    //   );
-
-    // await burnAndRelease
-    //   .release()
-    //   // Print RenVM status - "pending", "confirming" or "done".
-    //   .on("status", (status) =>
-    //     status === "confirming"
-    //       ? console.log(`${status} (${confirmations}/15)`)
-    //       : console.log(status)
-    //   )
-    //   // Print RenVM transaction hash
-    //   .on("txHash", (hash) => console.log(`RenVM hash: ${hash}`));
-
-    // console.log(`Withdrew ${amount} BTC to ${recipientAddress}.`);
   };
 
   const openGame = async (symbol: COIN, amount: string) => {
@@ -656,7 +602,7 @@ const Home: NextPage = () => {
                 </Button>
                 <Button
                   variant="contained"
-                  onClick={handleCloseDepositModal}
+                  onClick={handleCloseWithdrawModal}
                   color="error"
                 >
                   Cancel
@@ -730,9 +676,9 @@ const Home: NextPage = () => {
                     <Typography variant="body2">
                       {game.initiator !== address
                         ? game.initiator.replace(
-                            game.initiator.substring(5, 38),
-                            "..."
-                          )
+                          game.initiator.substring(5, 38),
+                          "..."
+                        )
                         : "Created By You"}
                     </Typography>
                   </Stack>
